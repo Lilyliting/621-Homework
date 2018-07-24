@@ -1,0 +1,872 @@
+---
+title: "621_Homework 3"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+author: "Liting Hu"
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+```{r message = FALSE, echo = FALSE}
+library(quantmod)
+library(ggplot2)
+library(reshape2)
+```
+
+## Question 1
+### a)
+Implement the Explicit Finite Difference method to price both European Call and Put options: 
+
+```{r}
+# European - Explicit Finite Difference method
+Option_Ex <- function(isCall=T, S0=100, K=100, 
+                      Tm=1, sigma=0.25, r=0.06, div=0.03, N=3, Nj=3) {
+    # precompute constants
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    #dx <- 0.2
+    dx <- sigma*sqrt(3*dt)
+    edx <- exp(dx)
+    
+    pu = 0.5*dt*((sigma/dx)^2 + nu/dx)
+    pm = 1.0 - dt*(sigma/dx)^2 - r*dt
+    pd = 0.5*dt*((sigma/dx)^2 - nu/dx)
+    
+    # initialise asset prices at maturity
+    St <- seq(1,2*Nj+1)
+    St <- S0*edx^(St-1-Nj)
+    
+    # initialise option values at maturity
+    temp <- matrix(0, ncol = (N + 1), nrow = (2*Nj + 1))
+    if (isCall) {
+        C <- temp
+        C[, N+1] <- pmax(C[, N+1], St - K)
+        
+        # step back 
+        for (i in N:1) {
+            for(j in 2:(2*Nj)) {
+                C[j, i] <- pu*C[j+1, i+1] + pm*C[j, i+1] + pd*C[j-1, i+1]
+            }
+            C[1, i] <- C[2, i]
+            C[2*Nj+1, i] <- C[2*Nj, i] + (St[2*Nj+1] - St[2*Nj])
+        }
+        ans <- C[Nj+1, 1]
+    }
+    else {
+        P <- temp
+        P[, N+1] <- pmax(P[, N+1], K - St)
+        
+        # step back 
+        for (i in N:1) {
+            for(j in 2:(2*Nj)) {
+                P[j, i] <- pu*P[j+1, i+1] + pm*P[j, i+1] + pd*P[j-1, i+1]
+            }
+            P[2*Nj+1, i] <- P[2*Nj, i]
+            P[1, i] <- P[2, i] + (St[2] - St[1])
+        }
+        ans <- P[Nj+1, 1]
+    }
+    return(ans)
+}
+```
+
+### b)
+Implement the Implicit Finite Difference method to price European Call and Put options:
+
+```{r}
+# European - Implicit Finite Difference method
+Option_Im <- function(isCall=T, S0=100, K=100, 
+                      Tm=1, sigma=0.25, r=0.06, div=0.03, N=3, Nj=3) {
+    # precompute constants
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    #dx <- 0.2
+    dx <- sigma*sqrt(3*dt)
+    edx <- exp(dx)
+    
+    pu = -0.5*dt*((sigma/dx)^2 + nu/dx)
+    pm = 1.0 + dt*(sigma/dx)^2 + r*dt
+    pd = -0.5*dt*((sigma/dx)^2 - nu/dx)
+    
+    # initialise asset prices at maturity
+    St <- seq(1, 2*Nj+1)
+    St <- S0*edx^(St - 1 - Nj)
+
+    # initialise option values at maturity
+    C <- matrix(0, ncol = 2, nrow = (2*Nj + 1))
+    if (isCall) {
+        C[, 1] <- pmax(C[, 1], St - K)
+    }
+    else {
+        C[, 1] <- pmax(C[, 1], K - St)
+    }
+    
+    #computer derivative boundary condition
+    lambda_L <- C[2, 1] - C[1, 1]
+    lambda_U <- C[2*Nj+1, 1] - C[2*Nj, 1]
+    
+    #step back through lattice
+    for(i in (N-1) : 0){
+        C <- solve_imp_tridiagonal(C, pu, pm, pd, lambda_L, lambda_U, Nj)
+        C[, 1] <- C[, 2]
+    }
+    
+    ans <- C[Nj+1, 1]
+    return(ans)
+}
+
+# Solve implicit tridiagonal system
+solve_imp_tridiagonal <- function(C,pu,pm,pd,lambda_L,lambda_U,Nj) {
+    #substitute boundary condition at j=-Nj into j = -Nj+1
+    vj <- Nj + 1
+    pmp <- c()
+    pp <- c()
+    pmp[-Nj+vj+1] <- pm + pd
+    pp[-Nj+vj+1] <- C[-Nj+1+vj, 1] + pd*lambda_L
+    
+    #eliminate upper diagonal
+    for (j in (-Nj+2):(Nj-1)) {
+        pmp[j+vj] <- pm - pu*pd/pmp[j-1+vj]
+        pp[j+vj] <- C[j+vj, 1] - pp[j-1+vj]*pd/pmp[j-1+vj]
+    }
+    
+    #use bounary condition at j = Nj and equation at j = Nj-1
+    C[Nj+vj, 2] <- (pp[Nj-1+vj] + pmp[Nj-1+vj]*lambda_U)/(pu + pmp[Nj-1+vj])
+    C[Nj-1+vj, 2] <- C[Nj+vj, 2] - lambda_U
+    
+    #back substitution
+    for( j in (Nj-2):-Nj){
+        C[j+vj, 2] = (pp[j+vj] - pu*C[j+1+vj, 2])/pmp[j+vj]
+    }
+    return(C)
+}
+```
+
+### c)
+
+Assume \[ \epsilon  \approx \Delta {x^2} + \Delta t\]
+
+Since the convergence condition is \[\Delta x \ge \sigma \sqrt {3\Delta t}\]
+
+so we have
+\[\Delta t \le \frac{{\Delta {x^2}}}{{3{\sigma ^2}}}\]
+\[\varepsilon  \le \left( {1 + \frac{1}{{3{\sigma ^2}}}} \right)\Delta {x^2} < 0.001\]
+\[\Delta x < \frac{1}{{10}}\sqrt {\frac{{3{\sigma ^2}}}{{(3{\sigma ^2} + 1)10}}} \]
+From Les Clewlow and Chris Strickland, a reasonable range of asset price values at the maturity date of the option is three standard deviations either side of the mean. (\[{n_{SD}} = 3 \times 2 = 6\])
+\[\Delta x = \frac{{{n_{SD}}\sigma \sqrt T }}{{2{N_j} + 1}} < \frac{1}{{10}}\sqrt {\frac{{3{\sigma ^2}}}{{10(3{\sigma ^2} + 1)}}} \]
+\[{N_j} > 5{n_{SD}}\sigma \sqrt {\frac{{10(3{\sigma ^2} + 1)T}}{{3{\sigma ^2}}}}  - \frac{1}{2}\]
+Under these conditon,
+\[\Delta t \le \frac{{\Delta {x^2}}}{{3{\sigma ^2}}} = \frac{{0.001}}{{\left( {3{\sigma ^2} + 1} \right)}}\]
+\[N = 1/\Delta t \ge 1000\left( {3{\sigma ^2} + 1} \right)\]
+
+With parameters given by (d):
+\[\begin{array}{l}
+\Delta x = {\rm{0.01256562}}\\
+{N_j} = 60\\
+\Delta t = {\rm{0.0008421053}}\\
+N = 1221
+\end{array}\]
+
+
+### d)
+
+```{r}
+epsilon <- 0.001
+n <- 6
+sigma <- 0.25
+Nj <- ceiling(((n*sigma)/sqrt(0.001/(1+1/3/sigma^2))-1)/2)
+Nj
+N <- ceiling(3*((2*Nj+1)/n)^2)
+N
+
+Ex.C <- Option_Ex(N = N, Nj = Nj)
+Ex.P <- Option_Ex(isCall = F, N = N, Nj = Nj)
+Im.C <- Option_Im(N = N, Nj = Nj)
+Im.P <- Option_Im(isCall = F, N = N, Nj = Nj)
+
+re <- data.frame(c(Ex.C, Im.C), c(Ex.P, Im.P))
+colnames(re) <- c("Call", "Put")
+rownames(re) <- c("Explicit", "Implicit")
+
+```
+
+
+Prices under these four schemes are showed below. \(N\) is 60 and \(N_j\) is 1221, as calculated in part c.
+
+```{r results = 'asis'}
+knitr::kable(re, caption = "Finite Difference methods")
+```
+
+
+### e)
+```{r}
+# BSM model
+Option_BSM <- function(isCall = T, S0=100, K=100, Tm=1, sigma=.25, r=0.06, div=0.03) {
+    d1 <- (log(S0/K) + (r - div + sigma^2/2)*Tm)/sigma/sqrt(Tm)
+    d2 <- d1 - sigma*sqrt(Tm)
+    if (isCall) {p <- S0*exp(-div*Tm)*pnorm(d1) - K*exp(-r*Tm)*pnorm(d2)}
+    else {p <- K*exp(-r*Tm)*pnorm(-d2) - S0*exp(-div*Tm)*pnorm(-d1)}
+    return(p)
+}
+
+```
+
+Iterative procedure:
+
+```{r}
+# Explicit-Call ----
+Nj.count <- 10
+dif <- 1
+bsp <- Option_BSM()
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 1
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Ex(N = N, Nj = Nj.count)
+    dif <-  abs(op - bsp)
+}
+Ex.C <- op
+Ex.C.Nj <- Nj.count
+Ex.C.N <- N
+
+```
+
+```{r}
+# Implicit-Call ----
+Nj.count <- 10
+dif <- 1
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 10
+    # When Nj is too large (150+), the implicit fucntion runs very slow. 
+    # So at first let the step length be 10
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Im(N = N, Nj = Nj.count)
+    dif <-  abs(op - bsp)
+}
+dif <- 1
+Nj.count <- Nj.count - 10
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 1
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Im(N = N, Nj = Nj.count)
+    dif <-  abs(op - bsp)
+}
+Im.C <- op
+Im.C.Nj <- Nj.count
+Im.C.N <- N
+```
+
+```{r}
+# Explicit-Put ----
+Nj.count <- 10
+dif <- 1
+bsp <- Option_BSM(isCall = F)
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 1
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Ex(isCall = F, N = N, Nj = Nj.count)
+    dif <-  abs(op - bsp)
+}
+Ex.P <- op
+Ex.P.Nj <- Nj.count
+Ex.P.N <- N
+```
+
+```{r}
+# Implicit-Put ----
+Nj.count <- 10
+dif <- 1
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 10
+    # the step length is 10 as the same reason above
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Im(isCall = F, N = N, Nj = Nj.count)
+    dif <- abs(op - bsp)
+}
+dif <- 1
+Nj.count <- Nj.count - 10
+while (dif > epsilon) {
+    Nj.count <- Nj.count + 1
+    N <- ceiling(3*((2*Nj.count+1)/n)^2)
+    op <- Option_Im(isCall = F, N = N, Nj = Nj.count)
+    dif <-  abs(op - bsp)
+}
+Im.P <- op
+Im.P.Nj <- Nj.count
+Im.P.N <- N
+```
+
+```{r}
+result2 <- data.frame(c(Ex.C, Im.C), c(Ex.P, Im.P))
+colnames(result2) <- c("Call", "Put")
+rownames(result2) <- c("Explicit", "Implicit")
+
+Nj <- c(Ex.C.Nj, Im.C.Nj, Ex.P.Nj, Im.P.Nj)
+N <- c(Ex.C.N, Im.C.N, Ex.P.N, Im.P.N)
+dt <- 1/Nj
+dx <- 0.25*sqrt(3*dt)
+steps <- data.frame(Nj, N, dt, dx)
+rownames(steps) <- c("Explicit.Call", "Implicit.Call", "Explicit.Put", "Implicit.Put")
+```
+Results are showed below, all of them are close to BSM model.
+```{r results = 'asis'}
+knitr::kable(result2, caption = "Finite Difference methods")
+```
+N, Nj, dt, dx are silghtly different from theoretical answers.
+```{r results = 'asis'}
+knitr::kable(steps, caption = "Finite Difference methods")
+```
+
+### f)
+```{r}
+sigmas <- seq(0.05, 0.6, by = 0.02)
+Tm <- 1
+div <- 0.03
+r <- 0.06
+pu <- c()
+pm <- c()
+pd <- c()
+
+for (s in sigmas) {
+    Nj <- ceiling(((n*s)/sqrt(0.001/(1+1/3/s^2))-1)/2)
+    N = ceiling(3*((2*Nj+1)/n)^2)
+    dt <- Tm/N
+    #dx <- s*sqrt(3*dt)
+    dx <- 0.02
+    nu <- r - div - 0.5*s^2
+    pu = c(pu, -0.5*dt*((s/dx)^2 + nu/dx))
+    pm = c(pm, 1.0 + dt*(s/dx)^2 + r*dt)
+    pd = c(pd, -0.5*dt*((s/dx)^2 - nu/dx))
+}
+
+ps <- data.frame("sigma" = sigmas, pu, pm, pd)
+ps.long <- melt(ps, id="sigma")
+ggplot(data = ps.long, aes(x = sigma, y=value, colour=variable)) + geom_line()
+```
+pu and pd have a similar path which has a tendency to decrease from zero. While pm is increasing as sigma grows larger.
+
+### g)
+Implement the Crank-Nicolson Finite Difference method and price both European Call and Put options:
+
+```{r}
+# European - The Crank-Nicolson Finite Difference method
+Option_CN <- function(isCall=T, S0=100, K=100, 
+                      Tm=1, sigma=0.25, r=0.06, div=0.03, N=3, Nj=3) {
+    # precompute constants
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    #dx <- 0.2
+    dx <- sigma*sqrt(3*dt)
+    edx <- exp(dx)
+    
+    pu = -0.25*dt*((sigma/dx)^2 + nu/dx)
+    pm = 1.0 + 0.5*dt*(sigma/dx)^2 + 0.5*r*dt
+    pd = -0.25*dt*((sigma/dx)^2 - nu/dx)
+    
+    # initialise asset prices at maturity
+    St <- seq(1, 2*Nj+1)
+    St <- S0*edx^(St - 1 - Nj)
+    
+    # initialise option values at maturity
+    C <- matrix(0, ncol = 2, nrow = (2*Nj + 1))
+    if (isCall) {
+        C[, 1] <- pmax(C[, 1], St - K)
+    }
+    else {
+        C[, 1] <- pmax(C[, 1], K - St)
+    }
+    
+    # computer derivative boundary condition
+    lambda_L <- C[2, 1] - C[1, 1]
+    lambda_U <- C[2*Nj+1, 1] - C[2*Nj, 1]
+    
+    # step back through lattice
+    for(i in (N-1) : 0){
+        C <- solve_CK_tridiagonal(C, pu, pm, pd, lambda_L, lambda_U, Nj)
+        C[, 1] <- C[, 2]
+    }
+    return(C[Nj+1, 1])
+}
+
+# Solve CK tridiagonal system
+solve_CK_tridiagonal <- function(C, pu, pm, pd, lambda_L, lambda_U, Nj){
+    
+    #substitute boundary condition at j=-Nj into j = -Nj+1
+    vj <- Nj + 1
+    pmp <- c(); pp <- c()
+    pmp[-Nj+vj+1] <- pm + pd
+    pp[-Nj+vj+1] <- (-pu*C[-Nj+2+vj, 1])-(pm-2)*C[-Nj+1+vj, 1] - pd*C[-Nj+vj, 1] + pd*lambda_L
+    
+    #eliminate upper diagonal
+    for( j in(-Nj+2):(Nj-1)){
+        pmp[j+vj] <- pm-pu*pd/pmp[j-1+vj]
+        pp[j+vj] <- -pu*C[j+1+vj, 1] - (pm-2)*C[j+vj, 1]-pd*C[j-1+vj, 1]-pp[j-1+vj]*pd/pmp[j-1+vj]
+    }
+    
+    #use bounary condition at j = Nj and equation at j = Nj-1
+    C[Nj+vj, 2] <- (pp[Nj-1+vj] + pmp[Nj-1+vj]*lambda_U)/(pu + pmp[Nj-1+vj])
+    C[Nj-1+vj, 2] <- C[Nj+vj, 2] - lambda_U
+    
+    #back substitution
+    for( j in (Nj-2): (-Nj)){
+        C[j+vj, 2] = ( pp[j+vj] - pu*C[j+1+vj, 2] )/pmp[j+vj]
+    }
+    C[1, 2] <- C[1, 1]-C[2, 1]+C[2, 2]
+    return (C)
+}
+
+sigma <- 0.25
+Nj <- ceiling(((n*sigma)/sqrt(0.001/(1+1/3/sigma^2))-1)/2)
+N <- ceiling(3*((2*Nj+1)/n)^2)
+
+CN.C <- Option_CN(N = N, Nj = Nj)
+CN.P <- Option_CN(isCall = F, N = N, Nj = Nj)
+result3 <- rbind(re, c(CN.C, CN.P))
+rownames(result3) <- c("EFD", "IFD", "CNFD")
+```
+
+```{r results = 'asis'}
+knitr::kable(result3, caption = "Finite Difference methods")
+```
+
+Prices by Crank-Nicolson are between what we calculate by explicit and implicit methods. All these three method have similar results.
+
+### h)
+```{r}
+# calculate hedge sensitivities
+Greeks <- function(isCall=T, S0=100, K=100, 
+                   Tm=1, sigma=0.25, r=0.06, div=0.03, N=3, Nj=3) {
+    # Output: Delta, Gamma, Theta, and Vega
+    
+    # precompute constants
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    #dx <- 0.2
+    dx <- sigma*sqrt(3*dt)
+    edx <- exp(dx)
+    
+    pu = 0.5*dt*((sigma/dx)^2 + nu/dx)
+    pm = 1.0 - dt*(sigma/dx)^2 - r*dt
+    pd = 0.5*dt*((sigma/dx)^2 - nu/dx)
+    
+    dsigma <- 0.0001*sigma # to compute vega, define delta sigma as a small fraction 
+    
+    # initialise asset prices at maturity
+    St <- seq(1, 2*Nj+1)
+    St <- S0*edx^(St-1-Nj)
+    
+    # initialise option values at maturity
+    temp <- matrix(0, ncol = (N + 1), nrow = (2*Nj + 1))
+    if (isCall) {
+        C <- temp
+        C[, N+1] <- pmax(C[, N+1], St - K)
+        
+        # step back 
+        for (i in N:1) {
+            for(j in 2:(2*Nj)) {
+                C[j, i] <- pu*C[j+1, i+1] + pm*C[j, i+1] + pd*C[j-1, i+1]
+            }
+            C[1, i] <- C[2, i]
+            C[2*Nj+1, i] <- C[2*Nj, i] + (St[2*Nj+1] - St[2*Nj])
+        }
+    }
+    else {
+        P <- temp
+        P[, N+1] <- pmax(P[, N+1], K - St)
+        
+        # step back 
+        for (i in N:1) {
+            for(j in 2:(2*Nj)) {
+                P[j, i] <- pu*P[j+1, i+1] + pm*P[j, i+1] + pd*P[j-1, i+1]
+            }
+            P[2*Nj+1, i] <- P[2*Nj, i]
+            P[1, i] <- P[2, i] + (St[2] - St[1])
+        }
+        C <- P
+    } 
+    
+    delta <- (C[Nj+2, 1] - C[Nj, 1])/(St[Nj+2] - St[Nj])
+    gamma <- 2*((C[Nj+2, 1] - C[Nj+1, 1])/(St[Nj+2] - St[Nj+1]) - 
+                    (C[Nj+1, 1] - C[Nj, 1])/(St[Nj+1] - St[Nj]))/(St[Nj+2] - St[Nj])
+    theta <- (C[Nj+1, 2] - C[Nj+1, 1])/dt
+    vega <- (Option_Ex(isCall, S0, K, Tm, sigma + dsigma, r, div, N, Nj) - 
+        Option_Ex(isCall, S0, K, Tm, sigma - dsigma, r, div, N, Nj))/2/dsigma
+    result <- c(delta, gamma, theta, vega)
+    return(result)
+}
+```
+Using parameters in (d), for a European option: Delta, Gamma, Theta, and Vega are 
+```{r}
+Greeks(N=N, Nj=Nj)
+```
+
+## Question 2
+### a)
+Doing same thing as in HW1:
+```{r}
+# Download option prices
+setwd("/Users/apple/Desktop/621/HW3")
+readfile <- try(read.csv("Calls.csv"), TRUE)
+if (inherits(readfile, "try-error")) {
+    # Get option chains from Yahoo finance
+    AAPL.OPTS <- getOptionChain("AAPL", NULL)
+    C1 <- AAPL.OPTS$Apr.21.2017$calls
+    P1 <- AAPL.OPTS$Apr.21.2017$puts
+    C1$Ave.Price <- (C1$Bid + C1$Ask)/2
+    P1$Ave.Price <- (P1$Bid + P1$Ask)/2
+    C1 <- C1[, c(1, 4, 5, 8)]
+    P1 <- P1[, c(1, 4, 5, 8)]
+    C2 <- AAPL.OPTS$May.19.2017$calls
+    P2 <- AAPL.OPTS$May.19.2017$puts
+    C2$Ave.Price <- (C2$Bid + C2$Ask)/2
+    P2$Ave.Price <- (P2$Bid + P2$Ask)/2
+    C2 <- C2[, c(1, 4, 5, 8)]
+    P2 <- P2[, c(1, 4, 5, 8)]
+    C3 <- AAPL.OPTS$Jun.16.2017$calls
+    P3 <- AAPL.OPTS$Jun.16.2017$puts
+    C3$Ave.Price <- (C3$Bid + C3$Ask)/2
+    P3$Ave.Price <- (P3$Bid + P3$Ask)/2
+    C3 <- C3[, c(1, 4, 5, 8)]
+    P3 <- P3[, c(1, 4, 5, 8)]
+    
+    temp <- merge(C1, C2, by = "Strike")
+    calls <- merge(temp, C3, by = "Strike")
+    temp <- merge(P1, P2, by = "Strike")
+    puts <- merge(temp, P3, by = "Strike")
+    coln <- c("Strike", "Bid1", "Ask1", "Apr.21.2017", "Bid2", "Ask2", 
+              "May.19.2017", "Bid3", "Ask3", "Jun.16.2017")
+    colnames(calls) <- coln
+    colnames(puts) <- coln
+    calls <- calls[9:18, ]
+    puts <- puts[10:19, ]
+    print(calls)
+    print(puts)
+    write.csv(calls, file = "Calls.csv", row.names = F)
+    write.csv(puts, file = "Puts.csv", row.names = F)
+} else {
+    calls <- read.csv("Calls.csv")
+    puts <- read.csv("Puts.csv")
+}
+
+# todaystock <- getQuote("AAPL") 
+# S_0 <- todaystock[, 2] # The value of underlying
+# When the option data are downloaded, the stock price is 140.26
+S_0 <- 140.26
+
+tau <- c(24/252, 44/252, 62/252) # time to maturity
+r <- 0.0075 # the current short-term interest rate
+fsigma <- function(isCall = T, sigma, K_i, maturity_i) {
+    # Epsilon. To calculate implied vol
+    S0 <- S_0
+    if (isCall) {prices <- calls}
+    else {prices <- puts}
+    p <- prices[K_i, 3*maturity_i + 1]
+    K <- calls[K_i, 1]
+    price.by.bs <- Option_BSM(isCall, S0, K, tau[maturity_i], sigma, r)
+    ans <- price.by.bs - p
+    return(ans)
+}
+
+IV.Calls <- calls[, c(1, 4, 7, 10)]
+IV.PUTS <- puts[, c(1, 4, 7, 10)]
+for(i in 1:10) {
+    for(j in 1:3) {
+        # use bisection method to calculate implied vols
+        a <- 0.001
+        b <- 100
+        epsilon <- abs(a - b)
+        while(epsilon > 1e-4) {
+            mid <- (a + b)/2
+            if (fsigma(T, a, i, j)*fsigma(T, mid, i, j) < 0 ) b <- mid
+            else a <- mid
+            epsilon <- abs(a - b)
+        }
+        IV.Calls[i, j+1] <- a
+        a <- 0.001
+        b <- 100
+        epsilon <- abs(a - b)
+        while(epsilon > 1e-4) {
+            mid <- (a + b)/2
+            if (fsigma(F, a, i, j)*fsigma(F, mid, i, j) < 0 ) b <- mid
+            else a <- mid
+            epsilon <- abs(a - b)
+        }
+        IV.PUTS[i, j+1] <- a
+    }
+}
+IV.Calls[,2:4][IV.Calls[,2:4]>99]=NaN
+IV.PUTS[,2:4][IV.PUTS[,2:4]>99]=NaN # Implied vols calculated as in HW1
+```
+
+Implied vols are showed below:
+
+```{r results = 'asis'}
+knitr::kable(IV.Calls, caption = "Implied vols for Call Option")
+```
+
+```{r results = 'asis'}
+knitr::kable(IV.PUTS, caption = "Implied vols for Put Option")
+```
+
+### b)
+```{r}
+FD.calls <- calls
+FD.puts <- puts
+for (i in 1:3) {
+    Strike.C <- IV.Calls[, 1]
+    Strike.P <- IV.PUTS[, 1]
+    for (j in 1:10) {
+        sigma.C <- IV.Calls[j, i+1]
+        sigma.P <- IV.PUTS[j, i+1]
+        
+        # Theoretical N and Nj to make error less than 0.001
+        Nj.C <- ceiling(((n*sigma.C)/sqrt(0.001/(1+1/3/sigma.C^2))-1)/2)
+        N.C <- ceiling(3*((2*Nj.C+1)/n)^2)
+        Nj.P <- ceiling(((n*sigma.P)/sqrt(0.001/(1+1/3/sigma.P^2))-1)/2)
+        N.P <- ceiling(3*((2*Nj.P+1)/n)^2)
+
+        # compute all things we need    
+        if (is.na(sigma.C)) {
+            FD.calls[j, (3*i-1):(3*i+1)] <- c(NaN, NaN, NaN)
+        } else {
+            FD.calls[j, 3*i-1] <- Option_Ex(S0 = S_0, K = Strike.C[j], Tm = tau[i], 
+                                            sigma = sigma.C, div = 0, N = N.C, Nj = Nj.C)
+            FD.calls[j, 3*i] <- Option_Im(S0 = S_0, K = Strike.C[j], Tm = tau[i], 
+                                          sigma = sigma.C, div = 0, N = N.C, Nj = Nj.C)
+            FD.calls[j, 3*i+1] <- Option_CN(S0 = S_0, K = Strike.C[j], Tm = tau[i], 
+                                            sigma = sigma.C, div = 0, N = N.C, Nj = Nj.C)
+        }
+        
+        if (is.na(sigma.P)) {
+            FD.puts[j, (3*i-1):(3*i+1)] <- c(NaN, NaN, NaN)
+        } else {
+            FD.puts[j, 3*i-1] <- Option_Ex(isCall = F, S0 = S_0, K = Strike.P[j], Tm = tau[i], 
+                                           sigma = sigma.P, div = 0, N = N.P, Nj = Nj.P)
+            FD.puts[j, 3*i] <- Option_Im(isCall = F, S0 = S_0, K = Strike.P[j], Tm = tau[i], 
+                                         sigma = sigma.P, div = 0, N = N.P, Nj = Nj.P)
+            FD.puts[j, 3*i+1] <- Option_CN(isCall = F, S0 = S_0, K = Strike.P[j], Tm = tau[i], 
+                                           sigma = sigma.P, div = 0, N = N.P, Nj = Nj.P)
+        }
+    }
+}
+
+coln11 <- c("Strikes", "EFD1", "IFD1", "CNFD1", 
+            "EFD2", "IFD2", "CNFD2", 
+            "EFD3", "IFD3", "CNFD3")
+# "1": maturity at Apr.21.2017; "2": maturity at May.19.2017; "3": maturity at Jun.16.2017.
+colnames(FD.calls) <- coln11
+colnames(FD.puts) <- coln11
+```
+
+All prices are showed below. For call and put options with same parameters, EFD < CNFD < IFD. 
+```{r results = 'asis'}
+knitr::kable(FD.calls, caption = "Prices of Call Option under Finite Difference methods")
+```
+
+```{r results = 'asis'}
+knitr::kable(FD.puts, caption = "Prices of Put Option under Finite Difference methods")
+```
+
+### c)
+```{r}
+G.calls <- c()
+G.puts <- c()
+for (i in 1:10) {
+    Strike.C <- IV.Calls[i, 1]
+    Strike.P <- IV.PUTS[i, 1]
+    G.c <- c()
+    G.p <- c()
+    for(j in 1:3) {
+        sigma.C <- IV.Calls[i, j+1]
+        sigma.P <- IV.PUTS[i, j+1]
+        
+        # Theoretical N and Nj to make error less than 0.001
+        Nj.C <- ceiling(((n*sigma.C)/sqrt(0.001/(1+1/3/sigma.C^2))-1)/2)
+        N.C <- ceiling(3*((2*Nj.C+1)/n)^2)
+        Nj.P <- ceiling(((n*sigma.P)/sqrt(0.001/(1+1/3/sigma.P^2))-1)/2)
+        N.P <- ceiling(3*((2*Nj.P+1)/n)^2)
+        
+        if (is.na(sigma.C)) {
+            G.c <- c(G.c, NaN, NaN, NaN, NaN)
+        } else {
+            G.c <- c(G.c, Greeks(T, S_0, Strike.C, tau[j], sigma.C, r, 0, N.C, Nj.C))
+        }
+        
+        if (is.na(sigma.P)) {
+            G.p <- c(G.p, NaN, NaN, NaN, NaN)
+        } else {
+            G.p <- c(G.p, Greeks(F, S_0, Strike.P, tau[j], sigma.P, r, 0, N.P, Nj.P))
+        }
+    }
+    G.calls <- rbind(G.calls, G.c)
+    G.puts <- rbind(G.puts, G.p)
+}
+coln22 <- c("Delta1", "Gamma1", "Theta1", "Vega1", 
+            "Delta2", "Gamma2", "Theta2", "Vega2", 
+            "Delta3", "Gamma3", "Theta3", "Vega3")
+# "1": maturity at Apr.21.2017; "2": maturity at May.19.2017; "3": maturity at Jun.16.2017.
+
+colnames(G.calls) <- coln22
+colnames(G.puts) <- coln22
+
+G.calls <- cbind(calls[1], G.calls)
+G.puts <- cbind(puts[1], G.puts)
+```
+Delta, Gamma, Theta, and Vega are showed below. 
+P.S. "1": maturity at Apr.21.2017; "2": maturity at May.19.2017; "3": maturity at Jun.16.2017.
+```{r results = 'asis'}
+knitr::kable(G.calls, caption = "Call option greeks by Explicit Finite Difference methods")
+```
+
+```{r results = 'asis'}
+knitr::kable(G.puts, caption = "Put option greeks by Explicit Finite Difference methods")
+```
+
+### d)
+```{r}
+a.big.df <- as.data.frame(matrix(rep(0, 10), nrow = 1))
+coln33 <- c("T", "Strike", "Type", "Ask", "Bid", 
+            "Market", "implied vol", "EFD", "IFD", "CNFD")
+colnames(a.big.df) <- coln33
+for (i in 1:3) {
+    df1 <- cbind(tau[i], calls[, 1], "Call", calls[, (3*i-1):(3*i+1)], 
+                 IV.Calls[, i+1], FD.calls[, (3*i-1):(3*i+1)])
+    colnames(df1) <- coln33
+    df2 <- cbind(tau[i], puts[, 1], "Put", puts[, (3*i-1):(3*i+1)], 
+                 IV.PUTS[, i+1], FD.puts[, (3*i-1):(3*i+1)])
+    colnames(df2) <- coln33
+    a.big.df <- rbind(a.big.df, df1, df2)
+}
+a.big.df <- a.big.df[-1, ]
+```
+
+```{r results = 'asis'}
+knitr::kable(a.big.df)
+```
+
+```{r}
+Captions <- c("Call options mature at Apr.21.2017", "Put options mature at Apr.21.2017",
+              "Call options mature at May.19.2017", "Put options mature at May.19.2017", 
+              "Call options mature at Jun.16.2017", "Put options mature at Jun.16.2017")
+for (i in 1:6) {
+    df <- a.big.df[(10*i-9):(10*i), c(2, 4:6, 8:10)]
+    df.long <- melt(df, id="Strike")
+    print(ggplot(data=df.long, aes(x = Strike, y=value, colour=variable)) +
+              geom_line() + ggtitle(Captions[i]))
+    Sys.sleep(1)
+}
+```
+All six kinds of prices coincide excepe CNFD. The reason might be that it needs more steps to convergence than explicit and implicit methods.
+
+## Question 3
+Define a function to calculate option price by heston model:
+```{r}
+Option_Heston <- function(S0=1, K=1, V0=0.1, theta=0.1, sigma=0.1, rou=-0.3, lambda=0, 
+                          kappa=2, Tm=5, r=0, Nt=10000, Ns=40, Nj=40) {
+    # Only for pricing European Put option in Heston model
+    
+    # Define maximum and minimun values for S, Nu, t
+    Smin <- 0
+    Smax <- 2*S0
+    NUmin <- 0
+    NUmax <- 0.5
+    Tmin <- 0
+    Tmax <- Tm
+    
+    # Building a uniform grid
+    dS <- (Smax - Smin)/Ns
+    St <- seq(Smin, Smax, by = dS)
+    dnu <- (NUmax - NUmin)/Nj
+    nu <- seq(NUmin, NUmax, by = dnu)
+    dt <- (Tmax - Tmin)/Nt
+    
+    # initialise asset prices at maturity
+    ST <- matrix(ncol = Nj + 1, nrow = Ns + 1)
+    for (i in 1:(Ns+1)) {ST[i, ] <- St[i]}
+    
+    # initialise option values at maturity
+    UT <- ST
+    for (i in 1:(Ns+1)) {UT[i, ] <- pmax(K - UT[i, ], 0)}
+    
+    # At time t-dt
+    UT_1 <- UT
+    # step back
+    for (k in 1:Nt) { 
+        # by time
+        for (i in 2:Ns) { 
+            # by S
+            for (j in 2:Nj) {
+                # by nu
+                
+                # Based on the partial differential equation, calculate dU/dt
+                # Then by dU/dt = ((U(t) - U(t-dt)))/dt, calcuate U(t-dt)
+                dU.dS <- (UT[i+1, j] - UT[i-1, j])/2/dS
+                dU.dnu <- (UT[i, j+1] - UT[i, j-1])/2/dnu
+                dU.2dS <- (UT[i+1, j] - 2*UT[i, j] + UT[i-1, j])/dS^2
+                dU.2dnu <- (UT[i, j+1] - 2*UT[i, j] + UT[i, j-1])/dnu^2
+                dU.dS.dnu <- (UT[i+1, j+1] + UT[i-1, j-1] - UT[i+1, j-1] - UT[i-1, j+1])/4/dS/dnu
+                
+                dU.dt <- -(1/2*nu[j]*St[i]^2*dU.2dS + 1/2*sigma^2*nu[j]*dU.2dnu +
+                               rou*sigma*nu[j]*St[i]*dU.dS.dnu + r*St[i]*dU.dS +
+                               kappa*(theta - nu[j])*dU.dnu - r*UT[i, j])
+                UT_1[i, j] <- UT[i, j] - dt*dU.dt
+            }
+        }
+        
+        # boundary conditon
+        UT_1[1, ] <- UT_1[2, ] + dS # S=Smin
+        UT_1[Ns+1, ] <- 0 # S=Smax
+        
+        # When nu = NUmax,  U(Si, NUmax, tn) = Si.
+        # This column is identical in every step
+        
+        # When nu = NUmin
+        for (l in 2:Ns) {
+            dU.dS <- (UT[l+1, 1] - UT[l-1, 1])/2/dS
+            dU.dnu <- (UT[l, 2] - UT[l, 1])/dnu
+            dU.dt <- r*UT[l, 1] - r*St[l]*dU.dS - kappa*theta*dU.dnu
+            UT_1[l, 1] <- UT[l, 1] - dt*dU.dt
+        }
+        
+        UT <- UT_1
+    }
+    
+    # Because the intervals in grid are small enough. 
+    # we simply use the mean of surrounding grid points as our option price
+    ii <- S0/dS + 1
+    ii1 <- floor(ii)
+    ii2 <- ii + 1
+    jj <- V0/dnu + 1
+    jj1 <- floor(jj)
+    jj2 <- jj + 1
+    ans <- (UT[ii1, jj1] + UT[ii1, jj2] + UT[ii2, jj1] + UT[ii2, jj2])/4
+    return(ans)
+}
+```
+
+```{r}
+K <- c(0.5, 0.75, 1, 1.25, 1.5)
+kappa <- c(1, 2, 4)
+
+temp <- as.data.frame(matrix(ncol = 1, nrow = 5))
+comparetable <- data.frame(temp)
+rownames(comparetable) <- as.character(K)
+
+for (i in 1:5) {
+    kap = 2
+    k <- K[i]
+    PP <- Option_Heston(K = k, kappa = kap)
+    comparetable[i, 1] <- PP
+}
+Real_value <- c(0.543017, 0.385109, 0.273303, 0.195434, 0.14121)
+comparetable <- data.frame(comparetable, Real_value)
+colnames(comparetable)[1] <- c("kappa=2") 
+```
+
+The result is showed below:
+
+```{r results = 'asis'}
+knitr::kable(comparetable, caption = "Comparison of solutions")
+```

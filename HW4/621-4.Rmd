@@ -1,0 +1,336 @@
+---
+title: "621_Homework 4"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+author: "Liting Hu"
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+## Question 1
+### 1
+```{r}
+require(Sim.DiffProc)
+setwd("/Users/apple/Desktop/621/HW4")
+sample_data <- read.csv("sample_data.csv") # Read data
+sample_data <- ts(sample_data, deltat=1/365) # dt = 1/365
+head(sample_data)
+
+```
+
+```{r}
+model.match <- as.data.frame(matrix(nrow = 5, ncol = 2))
+model.match[, 1] <- colnames(sample_data)
+best.n <- c()
+for (i in 1:5) {
+    # model 1
+    fx1 <- expression( theta[1]*x )
+    gx1 <- expression( theta[2]*x^theta[3] )
+    mod1 <- fitsde(data=sample_data[, i], drift=fx1, diffusion=gx1,
+                   start = list(theta1=1, theta2=1, theta3=1), pmle="euler")
+    
+    # model 2
+    fx2 <- expression( theta[1]+theta[2]*x )
+    gx2 <- expression( theta[3]*x^theta[4] )
+    mod2 <- fitsde(data=sample_data[, i], drift=fx2, diffusion=gx2,
+                   start = list(theta1=1,theta2=1,theta3=1,theta4=1), pmle="euler")
+    
+    # model 3
+    fx3 <- expression( theta[1]+theta[2]*x )
+    gx3 <- expression( theta[3]*sqrt(x) )
+    mod3 <- fitsde(data=sample_data[, i], drift=fx3, diffusion=gx3,
+                   start = list(theta1=1,theta2=1,theta3=1), pmle="euler")
+    
+    # model 4
+    fx4 <- expression( theta[1] )
+    gx4 <- expression( theta[2]*x^theta[3] )
+    mod4 <- fitsde(data = sample_data[, i], drift=fx4, diffusion=gx4,
+                   start = list(theta1=1,theta2=1,theta3=1), pmle="euler")
+    
+    # model 5
+    fx5 <- expression( theta[1]*x )
+    gx5 <- expression( theta[2]+theta[3]*x^theta[4] )
+    mod5 <- fitsde(data=sample_data[, i], drift=fx5, diffusion=gx5,
+                   start = list(theta1=1,theta2=1,theta3=1,theta4=1), pmle="euler")
+    
+    # Computes AIC
+    AIC <- c(AIC(mod1),AIC(mod2),AIC(mod3),AIC(mod4),AIC(mod5))
+    k <- which.min(AIC) # Choose the minimum
+    best.n[i] <- k
+    best <- paste0("model", k)
+    model.match[i, 2] <- best
+}
+```
+
+```{r results = 'asis'}
+knitr::kable(model.match, caption = "Model match")
+```
+The best models are chosen as Model 1,1,1,5,1 respectively based on AIC.
+
+### 2
+```{r}
+fx <- list(fx1, fx2, fx3, fx4, fx5)
+gx <- list(gx1, gx2, gx3, gx4, gx5)
+pmle <- eval(formals(fitsde.default)$pmle)
+
+for (j in 1:5) {
+    fitres <- lapply(1:4, function(i) fitsde(data = sample_data[, j], drift=fx[[best.n[j]]], diffusion=gx[[best.n[j]]],
+                                             pmle=pmle[i], start=list(theta1=1,theta2=1,theta3=1,theta4=1)))
+    Coef <- data.frame(do.call("cbind", lapply(1:4, function(i) coef(fitres[[i]]))))
+    Info <- data.frame(do.call("rbind", lapply(1:4, function(i) logLik(fitres[[i]]))),
+                       do.call("rbind", lapply(1:4, function(i) AIC(fitres[[i]]))),
+                       do.call("rbind", lapply(1:4, function(i) BIC(fitres[[i]]))))
+    Info <- t(Info)
+    colnames(Coef) <- pmle
+    colnames(Info) <- pmle
+    rownames(Info) <- c("logLic", "AIC", "BIC")
+    result <- rbind(Coef, Info)
+    print(paste0("stock", j))
+    print(result)
+}
+```
+
+For stock 1, the minimum AIC and BIC appear in euler method. Those calculated by kessler method are much larger (8 >> -2.563912e+05, 23.0258709 >> -2.563762e+05).
+
+For stock 2, the minimum AIC and BIC appear in kessler method. And euler's AIC and BIC are also less than ozaki's and shoji's.
+
+For stock 3, the minimum AICs and BICs appear in euler and kessler methods which are much smaller than ozaki's and shoji's.
+
+For stock 4, the minimum AIC and BIC appear in euler method. And kessler's AIC and BIC are also less than ozaki's and shoji's.
+
+For stock 5, the minimum AIC and BIC appear in euler method. And kessler's AIC and BIC are also less than ozaki's and shoji's. (similar situation as stock 4)
+
+### 3
+For my opinion, the Euler method and Kessler method provide best estimates.
+
+## Question 2
+```{r}
+library(xlsx)
+swaptions <- read.xlsx("2017_2_15_mid.xlsx", sheetName = "Quotes") # Read data
+head(swaptions)
+
+column <- 5 # choose 5th maturity which is 5 years
+dim(swaptions)
+Vol <- swaptions[seq(1, 38, by=2), 7]/100 # At-the-money volatility
+Strike <- swaptions[seq(2, 38, by=2), 7]/100 # Strike price K
+expiry <- swaptions[seq(1, 38, by=2), 1] # expiration date
+
+temp <- gregexpr("[0-9]+", expiry)
+expiry <- as.numeric(unlist(regmatches(expiry, temp)))
+expiry[1:4] <- expiry[1:4]/12 # Expiry date for swaptions
+```
+
+
+### 1
+```{r}
+SABRVol<-function(alpha,beta,rho,nu,Tm,f){ 
+    # All the contracts are at the money, so f=K
+        Term1 <- alpha/f^(1-beta)
+        Term2 <- (1-beta)^2/24*alpha^2/f^(2-2*beta)+rho*beta*nu*alpha/4/f^(1-beta)+(2-3*rho^2)*nu^2/24
+        ans <- Term1*(1 + Term2*Tm)
+        return(ans)
+}
+
+optimization <- function(beta) {
+    init.values = c(0.1, 0, 0.1)
+    lower.bound = c(0.0001, -1, 0.0001) # -1 < rou < 1
+    upper.bound = c(Inf, 1, Inf)
+    
+    objective.f <- function(parm,beta) {
+        # Objective function
+        # to search the minimum sum of (sigma_mkt - sigma_B)^2 
+        alpha <- parm[1]
+        rho <- parm[2]
+        nu <- parm[3]
+        Sigma_B <- SABRVol(alpha,beta,rho,nu,expiry,Strike)
+        return(sum((Vol-Sigma_B)^2))
+    }
+    
+    # PORT optimization routine
+    opt<-nlminb(start=init.values,
+                objective = objective.f,
+                lower = lower.bound,
+                upper = upper.bound,
+                beta=beta)
+    
+    parms <-opt$par
+    obj <- opt$objective
+    ans <- t(as.data.frame(c(beta, parms, obj)))
+    colnames(ans) <- c("beta", "alpha", "rho", "nu", "objective")
+    rownames(ans) <- NULL
+    return(ans)
+    
+}
+re1 <- optimization(0.5)
+```
+
+```{r results = 'asis'}
+knitr::kable(re1, caption = "Beta=0.5")
+```
+
+### 2
+
+```{r}
+re2 <- optimization(0.7)
+re3 <- optimization(0.4)
+```
+
+```{r results = 'asis'}
+knitr::kable(re2, caption = "Beta=0.7")
+```
+
+```{r results = 'asis'}
+knitr::kable(re3, caption = "Beta=0.4")
+```
+
+### 3
+```{r}
+library(ggplot2)
+library(reshape2)
+res <- as.data.frame(rbind(re1, re2, re3))
+
+res.long <- melt(res, id="beta")
+ggplot(data=res.long, aes(x=beta, y=value, color=variable)) + geom_line()
+```
+From this plot, we can see that as beta (3 values) grows larger, the objective function decreases. While in the mean time, alpha and rho is getting larger. Nu is decreasing.
+
+### 4
+```{r}
+betas <- seq(0, 1, by=0.1)
+opts <- optimization(0)
+for (i in betas) {
+    a <- optimization(i)
+    opts <- rbind(opts, a)
+}
+
+opts <- as.data.frame(opts[2:12, ])
+```
+
+```{r results = 'asis'}
+knitr::kable(opts)
+```
+
+```{r}
+opts.long <- melt(opts, id="beta")
+ggplot(data=opts.long, aes(x=beta, y=value, color=variable)) + geom_line()
+```
+
+To be more precisely, in this section, let beta equal to 0, 0.1, 0.2, ... 1. Still, objective value is decreasing as beta growing. We can basically say that beta=1 gives me the best estimation. 
+
+### 5
+
+```{r}
+beta <- 1
+re5 <- optimization(beta)
+alpha <- re3[2]
+rho <- re3[3]
+nu <- re3[4]
+
+column <- 7 # choose 7th maturity which is 10 years
+Vol2 <- swaptions[seq(1, 38, by=2), 9]/100 # At-the-money volatility
+Strike2 <- swaptions[seq(2, 38, by=2), 9]/100 # Strike price K
+
+VolB <- SABRVol(alpha,beta,rho,nu,expiry,Strike2)
+plot(expiry, Vol2, type = "l", col = "red", ylab = "volitility")
+lines(expiry, VolB, col = "blue")
+legend("topright", legend=c("Benchmark", "Calculated vol"),
+       col=c("red", "blue"), lty=c(1,1))
+obj <- sum((VolB-Vol2)^2)
+obj
+```
+
+Apply beta = 1 to swaps whose maturity is 10 years. The volitility calculated by SABR model is nearly a straight line. Given volitilities fluctuate around it. The SSE is 0.05352116 which is fairly small.
+
+## 3
+
+```{r}
+
+S0=1
+Tm=1
+sigma=0.2
+r=0.0075
+
+alpha <- 1
+N <- 10000
+eta <- 50
+lambda <- 2*pi/N/eta
+a <- N*eta # the effective upper limit for the integration
+b <- N*lambda/2 # log of strike prices range from -b to b
+
+# for phi_T
+f_phi<- function(u, s, mu, sigma) {
+    # integrand
+    ans <- 1/sqrt(2*pi*sigma^2)*exp(-(s-mu)^2/2/sigma^2)*exp(1i*u*s)
+    return(ans)
+}
+
+phi_u <- function(u, mu, sigma, a, N) {
+    # Integral
+    # By the Simpson’s rule
+    s <- seq(-a, a, length.out = N)
+    h <- s[2] - s[1]
+    wn <- rep(c(2*h/3, 4*h/3), floor(N/2))
+    wn[1] <- h/3
+    wn[N] <- h/3
+    fn <- sapply(s, f_phi, u = u, mu = mu, sigma = sigma)
+    ans <- sum(fn*wn)
+    return(ans)
+}
+
+# Out the money
+zeta_v <- function(v, r, Tm, mu, sigma, a, N) {
+    ans <- exp(-r*Tm)*(1/(1 + 1i*v) - exp(r*Tm)/(1i*v) -
+                           phi_u(v - 1i, mu, sigma, a, N)/(v^2 - 1i*v))
+    return(ans)
+}
+
+gamma_v <- function(v, r, Tm, mu, sigma, alpha, a, N) {
+    ans <- (zeta_v(v - 1i*alpha, r, Tm, mu, sigma, a, N)-
+                zeta_v(v + 1i*alpha, r, Tm, mu, sigma, a, N))/2
+    return(ans)
+}
+
+# In the money
+psi_v <- function(v, r, Tm, mu, sigma, alpha, a, N) {
+    ans <- (exp(-r*Tm)*phi_u(v - (alpha + 1)*1i, mu, sigma, a, N))/
+        (alpha^2 + alpha - v^2 + 1i*(2*alpha + 1)*v)
+    return(ans)
+}
+
+
+Call_FFT <- function(u, r, Tm, mu, sigma, alpha, a, N) {
+    ku <- -b + lambda*(u-1)
+    s <- seq(0.0001, a, length.out = N)
+    h <- s[2] - s[1]
+    wn <- rep(c(2*h/3, 4*h/3), floor(N/2))
+    wn[1] <- h/3
+    wn[N] <- h/3
+    j <- seq(1, N)
+    vj <- (j-1)*eta
+    if (u < ((N+1)/2)) {
+        f <- exp(-1i*2*pi/N*(j-1)*(u-1))*exp(1i*b*vj)*psi_v(vj, r, Tm, r, sigma, alpha, a, N)
+        C <- exp(-alpha*k)/pi*sum(f*wn)
+    } else {
+        f <- exp(-1i*2*pi/N*(j-1)*(u-1))*exp(1i*b*vj)*gamma_v(vj, r, Tm, r, sigma, alpha, a, N)
+        C <- sinh(alpha*k)/pi*sum(f*wn)
+    }
+    return(C)
+}
+u=60
+Call_FFT(u, r, Tm, r, sigma, alpha, a, N)
+
+K <- (-b + (u-1)*lambda)^2
+Option_BSM <- function(isCall = T, S0=1, K=1, Tm=1, sigma=0.2, r=0.0075, div=0) {
+    d1 <- (log(S0/K) + (r - div + sigma^2/2)*Tm)/sigma/sqrt(Tm)
+    d2 <- d1 - sigma*sqrt(Tm)
+    if (isCall) {p <- S0*exp(-div*Tm)*pnorm(d1) - K*exp(-r*Tm)*pnorm(d2)}
+    else {p <- K*exp(-r*Tm)*pnorm(-d2) - S0*exp(-div*Tm)*pnorm(-d1)}
+    return(p)
+}
+Option_BSM(K=K)
+
+```
+

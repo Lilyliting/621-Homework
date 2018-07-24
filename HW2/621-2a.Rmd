@@ -1,0 +1,518 @@
+---
+title: "621_Homework 2"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+author: "Liting Hu"
+---
+```{r global_options, include=FALSE}
+knitr::opts_chunk$set(warning=FALSE, message=FALSE)
+```
+
+```{r message = FALSE, echo = FALSE}
+library(quantmod)
+library(lubridate)
+library(ggplot2)
+library(cowplot)
+```
+
+## Question 1
+### a)
+Construct function to calculate option values using an additive binomial tree:
+```{r}
+Option_BT <- function(isCall=T, isAmerican=F, S0=100, K=100, 
+                       Tm=1, sigma=0.2, r=0.0075, N=500) {
+    # The additive binomial tree
+    dt <- Tm/N
+    nu <- r - 0.5*sigma^2
+    dx <- sqrt(sigma^2*dt + (nu*dt)^2)
+    p <- 0.5 + 0.5*(nu*dt/dx)
+    
+    disc <- exp(-r*dt)
+    St <- rep(0, N + 1)
+    C <- rep(0, N + 1)
+    P <- rep(0, N + 1)
+    St[1] <- S0*exp(-N*dx)
+    for (i in 1:N) {St[i+1] <- St[i]*exp(2*dx)}
+    C <- pmax(C, St - K)
+    P <- pmax(P, K - St)
+    for (i in N:1) {
+        for (j in 1:i) {
+            C[j] = disc*(p*C[j + 1] + (1 - p)*C[j])
+            P[j] = disc*(p*P[j + 1] + (1 - p)*P[j])
+            St[j] <- St[j]/exp(-dx)
+            if (isAmerican==T) {
+                C[j] = max(C[j], St[j] - K)
+                P[j] = max(P[j], K - St[j])}
+        }
+    }
+    if (isCall) ans <- C[1]
+    else ans <- P[1]
+    return(ans)
+}
+
+```
+
+### b)
+This is BSM formula:
+```{r}
+Option_BSM <- function(isCall = T, S0=100, K=100, Tm=1, sigma=0.2, r=0.0075, div=0) {
+    d1 <- (log(S0/K) + (r - div + sigma^2/2)*Tm)/sigma/sqrt(Tm)
+    d2 <- d1 - sigma*sqrt(Tm)
+    if (isCall) {p <- S0*exp(-div*Tm)*pnorm(d1) - K*exp(-r*Tm)*pnorm(d2)}
+    else {p <- K*exp(-r*Tm)*pnorm(-d2) - S0*exp(-div*Tm)*pnorm(-d1)}
+    return(p)
+}
+```
+
+Then download options data and stock data from yahoo finance:
+```{r}
+setwd("/Users/apple/Desktop/621/HW2")
+readfile <- try(read.csv("Calls.csv"), TRUE)
+if (inherits(readfile, "try-error")) {
+    # Get option chains from Yahoo finance
+    AAPL.OPTS <- getOptionChain("AAPL", NULL)
+    C1 <- AAPL.OPTS$Apr.21.2017$calls
+    P1 <- AAPL.OPTS$Apr.21.2017$puts
+    C1$Ave.Price <- (C1$Bid + C1$Ask)/2
+    P1$Ave.Price <- (P1$Bid + P1$Ask)/2
+    C1 <- C1[, c(1, 4, 5, 8)]
+    P1 <- P1[, c(1, 4, 5, 8)]
+    C2 <- AAPL.OPTS$May.19.2017$calls
+    P2 <- AAPL.OPTS$May.19.2017$puts
+    C2$Ave.Price <- (C2$Bid + C2$Ask)/2
+    P2$Ave.Price <- (P2$Bid + P2$Ask)/2
+    C2 <- C2[, c(1, 4, 5, 8)]
+    P2 <- P2[, c(1, 4, 5, 8)]
+    C3 <- AAPL.OPTS$Jun.16.2017$calls
+    P3 <- AAPL.OPTS$Jun.16.2017$puts
+    C3$Ave.Price <- (C3$Bid + C3$Ask)/2
+    P3$Ave.Price <- (P3$Bid + P3$Ask)/2
+    C3 <- C3[, c(1, 4, 5, 8)]
+    P3 <- P3[, c(1, 4, 5, 8)]
+    
+    temp <- merge(C1, C2, by = "Strike")
+    calls <- merge(temp, C3, by = "Strike")
+    temp <- merge(P1, P2, by = "Strike")
+    puts <- merge(temp, P3, by = "Strike")
+    coln <- c("Strike", "Bid1", "Ask1", "Apr.21.2017", "Bid2", "Ask2", 
+              "May.19.2017", "Bid3", "Ask3", "Jun.16.2017")
+    colnames(calls) <- coln
+    colnames(puts) <- coln
+    calls <- calls[3:22, ]
+    puts <- puts[-19, ]
+    print(calls)
+    print(puts)
+    write.csv(calls, file = "Calls.csv", row.names = F)
+    write.csv(puts, file = "Puts.csv", row.names = F)
+} else {
+    calls <- read.csv("Calls.csv")
+    puts <- read.csv("Puts.csv")
+}
+
+todaystock <- getQuote("AAPL") 
+# S_0 <- todaystock[, 2] # The value of underlying
+# When the option data are downloaded, the stock price is 139.24.
+S_0 <- 139.55
+```
+
+As what we do in HW1, calculate the implied vols for all strikes and all maturities. I will skip this part but just show the result.
+```{r echo=FALSE}
+tau <- c(35/252, 55/252, 73/252) # time to maturity
+r <- 0.0075 # the current short-term interest rate
+fsigma <- function(isCall = T, sigma, K_i, maturity_i) {
+    # Epsilon. To calculate implied vol
+    S0 <- S_0
+    if (isCall) {prices <- calls}
+    else {prices <- puts}
+    p <- prices[K_i, 3*maturity_i + 1]
+    K <- calls[K_i, 1]
+    price.by.bs <- Option_BSM(isCall, S0, K, tau[maturity_i], sigma, r)
+    ans <- price.by.bs - p
+    return(ans)
+}
+
+IV.Calls <- calls[, c(1, 4, 7, 10)]
+IV.PUTS <- puts[, c(1, 4, 7, 10)]
+for(i in 1:20) {
+    for(j in 1:3) {
+        # use bisection method to calculate implied vols
+        a <- 0.001
+        b <- 100
+        epsilon <- abs(a - b)
+        while(epsilon > 1e-4) {
+            mid <- (a + b)/2
+            if (fsigma(T, a, i, j)*fsigma(T, mid, i, j) < 0 ) b <- mid
+            else a <- mid
+            epsilon <- abs(a - b)
+        }
+        IV.Calls[i, j+1] <- a
+        a <- 0.001
+        b <- 100
+        epsilon <- abs(a - b)
+        while(epsilon > 1e-4) {
+            mid <- (a + b)/2
+            if (fsigma(F, a, i, j)*fsigma(F, mid, i, j) < 0 ) b <- mid
+            else a <- mid
+            epsilon <- abs(a - b)
+        }
+        IV.PUTS[i, j+1] <- a
+    }
+}
+IV.Calls[,2:4][IV.Calls[,2:4]>99]=NaN
+IV.PUTS[,2:4][IV.PUTS[,2:4]>99]=NaN # Implied vols calculated as in HW1
+```
+
+Implied vols are showed below:
+
+```{r results = 'asis'}
+knitr::kable(IV.Calls, caption = "Implied vols for Call Option")
+```
+
+```{r results = 'asis'}
+knitr::kable(IV.PUTS, caption = "Implied vols for Put Option")
+```
+P.S. Sorry about losing put options data. When I noticed that I could just donwload them beyond trading time.
+
+
+Using these vols, calculate option prices by Binomial Tree and BSM:
+```{r}
+Calls.Prices <- merge(IV.Calls, IV.Calls, by = "Strike") # Define data frames for options prices
+Puts.Prices <- merge(IV.PUTS, IV.PUTS, by = "Strike")
+coln2 <- c("Strike", "Apr.21.2017.BT", "Apr.21.2017.BSM", "May.19.2017.BT", 
+           "May.19.2017.BSM", "Jun.16.2017.BT", "Jun.16.2017.BSM") 
+colnames(Calls.Prices) <- coln2
+colnames(Puts.Prices) <- coln2
+coln3 <- c("Strike", "Apr.21.2017.A", "May.19.2017.A", "Jun.16.2017.A") 
+Calls.A <- IV.Calls # for American Options
+Puts.A <- IV.PUTS
+colnames(Calls.A) <- coln3
+colnames(Puts.A) <- coln3
+
+Strike.C <- calls[, 1]
+Strike.P <- puts[, 1]
+
+for(i in 1:20) {
+    for(j in 1:3) {
+        # Calculate option prices
+        sigma.C <- IV.Calls[i, j+1]
+        sigma.P <- IV.PUTS[i, j+1]
+        Calls.Prices[i, 2*j] <- Option_BT(T, F, S_0, Strike.C[i], tau[j], sigma.C, r, 200)
+        Calls.Prices[i, 2*j+1] <- Option_BSM(T, S_0, Strike.C[i], tau[j], sigma.C, r)
+        Puts.Prices[i, 2*j] <- Option_BT(F, F, S_0, Strike.C[i], tau[j], sigma.P, r, 200)
+        Puts.Prices[i, 2*j+1] <- Option_BSM(F, S_0, Strike.C[i], tau[j], sigma.P, r)
+        Calls.A[i, j+1] <- Option_BT(T, T, S_0, Strike.C[i], tau[j], sigma.C, r, 200)
+        Puts.A[i, j+1] <- Option_BT(F, T, S_0, Strike.C[i], tau[j], sigma.P, r, 200)
+    }
+}
+```
+Option prices calculated as below:
+```{r results = 'asis'}
+knitr::kable(Calls.Prices, caption = "Call option prices")
+```
+
+```{r results = 'asis'}
+knitr::kable(Puts.Prices, caption = "Put option prices")
+```
+
+### c)
+```{r echo=F}
+mergedf.c <- merge(calls, Calls.Prices, by = "Strike")
+mergedf.c <- merge(mergedf.c, Calls.A, by = "Strike")
+mergedf.p <- merge(puts, Puts.Prices, by = "Strike")
+mergedf.p <- merge(mergedf.p, Puts.A, by = "Strike")
+
+C.A <- ggplot(data = mergedf.c, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.A, colour = "red")) +
+    geom_line(aes(y=May.19.2017.A, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.A, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="American Calls by Binomial Tree")
+C.BT <- ggplot(data = mergedf.c, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.BT, colour = "red")) +
+    geom_line(aes(y=May.19.2017.BT, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.BT, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="European Calls by Binomial Tree")
+C.BSM <- ggplot(data = mergedf.c, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.BSM, colour = "red")) +
+    geom_line(aes(y=May.19.2017.BSM, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.BSM, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="European Calls by BSM")
+
+P.A <- ggplot(data = mergedf.p, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.A, colour = "red")) +
+    geom_line(aes(y=May.19.2017.A, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.A, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="American Puts by Binomial Tree")
+P.BT <- ggplot(data = mergedf.p, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.BT, colour = "red")) +
+    geom_line(aes(y=May.19.2017.BT, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.BT, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="European Puts by Binomial Tree")
+P.BSM <- ggplot(data = mergedf.p, aes(x = Strike)) + 
+    geom_line(aes(y=Apr.21.2017.BSM, colour = "red")) +
+    geom_line(aes(y=May.19.2017.BSM, colour = "green")) + 
+    geom_line(aes(y=Jun.16.2017.BSM, colour = "blue")) +
+    geom_line(aes(y=Bid1), colour = "red", linetype=2) +
+    geom_line(aes(y=Ask1), colour = "red", linetype=3) +
+    geom_line(aes(y=Bid2), colour = "green", linetype=2) +
+    geom_line(aes(y=Ask2), colour = "green", linetype=3) +
+    geom_line(aes(y=Bid3), colour = "blue", linetype=2) +
+    geom_line(aes(y=Ask3), colour = "blue", linetype=3) +
+    scale_colour_manual("Maturity", breaks = c("blue", "green", "red"), 
+                        values = c("blue", "green", "red"), labels=c("Jun.16", "May.19", "Apr.21")) +
+    ylab("Price") + 
+    labs(title="European Puts by BSM")
+
+plot_grid(C.A, C.BT, C.BSM, ncol = 1, nrow = 3)
+```
+
+\pagebreak
+```{r echo=FALSE}
+plot_grid(P.A, P.BT, P.BSM, ncol = 1, nrow = 3)
+```
+
+From charts and plots, results calculated by binomial tree and BSM model are similar, even with Amrican ones.
+
+
+### d)
+```{r}
+Error.by.N <- function(N) {
+    # error for European Put
+    epsilon <- abs(Option_BSM(isCall = F) - Option_BT(isCall = F, N = N))
+    return(epsilon)
+} 
+
+N <- c(10, 20, 30, 40, 50, 100, 150, 200, 250, 300, 350, 400)
+Error <- sapply(N, Error.by.N)
+plot(N, Error, type = "l")
+```
+
+From this plot we can see that as N goes up, the error is decreasing and approaching a very small number (near zero).
+
+## Question 2
+### a)
+
+Implement a trinomial tree to price European, American Call and Put options:
+```{r tt}
+Option_TT <- function(isCall=T, isAmerican=F, S0=100, K=100, 
+                      Tm=1, sigma=0.25, r=0.06, div=0.03, N=200) {
+    # The Trinomial Tree
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    dx <- sigma*sqrt(3*dt)
+    edx <- exp(dx)
+    
+    pu = 0.5*((sigma^2*dt + nu^2*dt^2)/dx^2 + nu*dt/dx)
+    pm = 1.0 - (sigma^2*dt + nu^2*dt^2)/dx^2 
+    pd = 0.5*((sigma^2*dt + nu^2*dt^2)/dx^2 - nu*dt/dx)
+    
+    disc <- exp(-r*dt) # discount factor
+    St <- rep(0, 2*N + 1)
+    Ct <- rep(0, 2*N + 1)
+    Pt <- rep(0, 2*N + 1)
+    St[1] <- S0*exp(-N*dx)
+    for (i in 1:(2*N)) {St[i+1] <- St[i]*edx}
+    Ct <- pmax(Ct, St - K)
+    Pt <- pmax(Pt, K - St)
+    
+    temp <- matrix(rep(0, (N+1)*(2*N+1)), ncol = (N + 1))
+    C <- temp
+    P <- temp
+    C[, N+1] <- Ct
+    P[, N+1] <- Pt
+    
+    for (i in N:1) {
+        for (j in (N - i + 2):(N + i)) {
+            C[j, i] = disc*(pu*C[j+1, i+1] + pm*C[j, i+1] + pd*C[j-1, i+1])
+            P[j, i] = disc*(pu*P[j+1, i+1] + pm*P[j, i+1] + pd*P[j-1, i+1])
+            St[j] <- St[j]/exp(-dx)
+            if (isAmerican==T) {
+                C[j, i] = max(C[j, i], St[j] - K)
+                P[j, i] = max(P[j, i], K - St[j])}
+        }
+    }
+    if (isCall) {ans <- C[N + 1, 1]
+    } else {ans <- P[N + 1, 1]}
+    return(ans)
+}
+```
+
+
+### b)
+```{r tt2}
+# European & American Calls
+Call <- c(Option_TT(), Option_BSM(sigma = 0.25, r = 0.06, div = 0.03),
+          Option_TT(isAmerican = T))
+
+# European & American Calls Puts
+Put <- c(Option_TT(isCall = F), Option_BSM(isCall = F, sigma = 0.25, r = 0.06, div = 0.03),
+         Option_TT(isCall = F, isAmerican = T))
+df <- data.frame(Call, Put)
+rownames(df) <- c('Trinomial Tree', "Black-Scholes", "Trinomial Tree American")
+```
+
+```{r results = 'asis'}
+knitr::kable(df, caption = "Pricing by trinomial tree")
+```
+Using given parameters, the results for European Call and Put are very close between trinomial tree method and BSM method. But when calculating American call option by trinomial tree, it doesn't converge
+
+```{r}
+Error.by.N <- function(N) {
+    # error for European Put
+    # for trinomial tree
+    epsilon <- abs(Option_BSM(isCall = F, sigma = 0.25, r=0.06, div = 0.03) -
+                       Option_TT(isCall = F, N = N))
+    return(epsilon)
+} 
+
+N <- c(10, 20, 30, 40, 50, 100, 150, 200, 250, 300, 350, 400)
+Error <- sapply(N, Error.by.N)
+plot(N, Error, type = "l", col = "red")
+```
+
+Similar to binomial tree senario, from this plot we can see that as N goes up, the error is decreasing and approaching zero.
+
+## Question 3
+### a)
+```{r}
+Option_UPandOUT <- function(S0=10, K=10, Tm=0.3, sigma=0.2, r=0.01, div=0, H=11, N=500) {
+    # European Up-and Out
+    # Binomial tree
+    dt <- Tm/N
+    nu <- r - div - 0.5*sigma^2
+    dx <- sqrt(sigma^2*dt + (nu*dt)^2)
+    p <- 0.5 + 0.5*(nu*dt/dx)
+    
+    disc <- exp(-r*dt)
+    St <- rep(0, N + 1)
+    C <- rep(0, N + 1)
+    St[1] <- S0*exp(-N*dx)
+    for (i in 1:N) {St[i+1] <- St[i]*exp(2*dx)}
+    C <- pmax(C, St - K)
+    C[C >= H - K] = 0
+    
+    for (i in N:1) {
+        for (j in 1:i) {
+            St[j] <- St[j]/exp(-dx)
+            if (St[j] >= H) {C[j] = 0
+            } else {C[j] = disc*(p*C[j + 1] + (1 - p)*C[j])}
+        }
+    }
+    ans <- C[1]
+    return(ans)
+}
+Option_UPandOUT(N=10000)
+```
+The price of the European Up-and-Out call option is 0.0549897.
+
+### b)
+```{r}
+Option_UPandOUT_BS <- function(S0=10, K=10, Tm=0.3, sigma=0.2, r=0.01, div=0, H=11) {
+    # European Up-and-Out
+    # Explicit formulas
+    nu <- r - div - 0.5*sigma^2
+    d_sh <- (log(S0/H) + nu*Tm)/sigma/sqrt(Tm)
+    d_hs <- (log(H/S0) + nu*Tm)/sigma/sqrt(Tm)
+    C_bs <- Option_BSM(T, S0, K, Tm, sigma, r, div)
+    C_bs.h <- Option_BSM(T, S0, H, Tm, sigma, r, div)
+    C_bs.hs <- Option_BSM(T, H^2/S0, K, Tm, sigma, r, div)
+    C_bs.h.hs <- Option_BSM(T, H^2/S0, H, Tm, sigma, r, div)
+    ans <- C_bs - C_bs.h - (H - K)*exp(-r*Tm)*pnorm(d_sh) -
+        (H/S0)^(2*nu/sigma^2)*(C_bs.hs - C_bs.h.hs - (H - K)*exp(-r*Tm)*pnorm(d_hs))
+    return(ans)
+}
+Option_UPandOUT_BS()
+```
+The price of European Up-and-Out is 0.053.
+
+### c)
+
+To price an European Up-and-In call option by analytical solution:
+
+```{r}
+# The analytical solution
+Option_UPandIn <- function(S0=10, K=10, Tm=0.3, sigma=0.2, r=0.01, div=0, H=11) {
+    nu <- r - div - 0.5*sigma^2
+    d_sh <- (log(S0/H) + nu*Tm)/sigma/sqrt(Tm)
+    d_hs <- (log(H/S0) + nu*Tm)/sigma/sqrt(Tm)
+    C_bs.h <- Option_BSM(T, S0, H, Tm, sigma, r)
+    P_bs.hs <- Option_BSM(F, H^2/S0, K, Tm, sigma, r)
+    P_bs.h.hs <- Option_BSM(F, H^2/S0, H, Tm, sigma, r)
+    ans <- C_bs.h + (H - K)*exp(-r*Tm)*pnorm(d_sh) +
+        (H/S0)^(2*nu/sigma^2)*(P_bs.hs - P_bs.h.hs + (H - K)*exp(-r*Tm)*pnorm(-d_hs))
+    return(ans)
+}
+Option_UPandIn()
+```
+The price of European Up-and-In is 0.398 by the analytical solution.
+
+By The In-Out parity:
+```{r}
+# The In-Out parity
+# UI_BS + UO_BS = C_BS
+Option_BSM(T, 10, 10, 0.3, 0.2, 0.01) - Option_UPandOUT_BS()
+```
+The price of European Up-and-In is 0.398 by the In-Out parity which is nearly equal to the former one.
+
+### d)
+```{r}
+American_UpandIn <- function(S0=10, K=10, Tm=0.3, sigma=0.2, r=0.01, div=0, H=11) {
+    nu <- r - div - 0.5*sigma^2
+    d_bs <- (log(H^2/S0/min(H, K)) + nu*Tm)/sigma/sqrt(Tm)
+    d_sh <- (log(S0/H) + nu*Tm)/sigma/sqrt(Tm)
+    C_bs <- Option_BSM(T, S0, K, Tm, sigma, r)
+    C_bs.h <- Option_BSM(T, S0, H, Tm, sigma, r)
+    P_bs.h.hs <- Option_BSM(F, H^2/S0, min(H, K), Tm, sigma, r, div)
+    ans <- (H/S0)^(2*nu/sigma^2)*(P_bs.h.hs - (min(H, K) - K)*exp(-r*Tm)*pnorm(-d_bs))
+    if (K > H) {ans <- ans + C_bs - C_bs.h - (H - K)*exp(-r*Tm)*pnorm(d_sh)}
+    return(ans)
+}
+American_UpandIn()
+```
+

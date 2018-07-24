@@ -1,0 +1,629 @@
+---
+title: "621_Homework 1"
+output:
+  pdf_document:
+    toc: true
+    toc_depth: 3
+author: "Liting Hu"
+---
+```{r message = FALSE, echo = FALSE}
+library(quantmod)
+library(ggplot2)
+library(rgl)
+```
+
+## Question 1
+### a)
+
+To calculate the European Call and Put Option, define functions "Callprice" and "Putprice" based on the solution of Black-Scholes formula.
+```{r}
+Callprice <- function(S0, tau, K, r, sigma) {
+    d1 <- (log(S0/K)+(r-sigma^2/2)*tau)/tau/sqrt(tau)
+    d2 <- d1 - sigma*sqrt(tau)
+    c <- S0*pnorm(d1) - K*exp(-r*tau)*pnorm(d2)
+    return(c)
+}
+
+Putprice <- function(S0, tau, K, r, sigma) {
+    d1 <- (log(S0/K)+(r-sigma^2/2)*tau)/tau/sqrt(tau)
+    d2 <- d1 - sigma*sqrt(tau)
+    p <- K*exp(-r*tau)*pnorm(-d2) - S0*pnorm(-d1)
+    return(p)
+}
+
+S0 <- 100       # Stock price
+tau <- 30/252   # Time to maturity
+K <- 100        # Strike price
+r <- 0.05       # Interest rate
+sigma <- 0.2    # Volatility
+Callprice(S0, tau, K, r, sigma)
+Putprice(S0, tau, K, r, sigma)
+```
+Under the given initial conditions, call option price is 3.0496 and the put option price is 2.4561.
+
+### b)
+
+```{r}
+Callprice(S0, tau, K, r, sigma) - Putprice(S0, tau, K, r, sigma) - S0 + K*exp(-r*tau)
+```
+The Put-Call parity relation holds.
+
+### c)
+Get option chains from Yahoo finance by "quantmod":
+```{r}
+AAPL.OPTS <- getOptionChain("AAPL", NULL)
+C1 <- AAPL.OPTS$Mar.17.2017$calls
+C1$Ave.Price <- (C1$Bid + C1$Ask)/2
+C1 <- C1[, c(1, 8)]
+C2 <- AAPL.OPTS$Apr.21.2017$calls
+C2$Ave.Price <- (C2$Bid + C2$Ask)/2
+C2 <- C2[, c(1, 8)]
+C3 <- AAPL.OPTS$Jul.21.2017$calls
+C3$Ave.Price <- (C3$Bid + C3$Ask)/2
+C3 <- C3[, c(1, 8)]
+
+temp <- merge(C1, C2, by = "Strike")
+calls <- merge(temp, C3, by = "Strike")
+colnames(calls) <- c("Strike", "Mar.17.2017", "Apr.21.2017", "Oct.20.2017")
+calls <- calls[1:20, ]
+```
+
+All call option prices are showed below:
+
+```{r results = 'asis'}
+knitr::kable(calls, caption = "Call option prices")
+```
+
+
+Get the actual stock price:
+```{r}
+todaystock <- getQuote("AAPL") 
+S_0 <- todaystock[, 2]
+S_0
+```
+The actual stock price is 135.72.
+
+Treasury bill rate is 0.005. (https://www.treasury.gov/resource-center/data-chart-center/interest-rates/Pages/TextView.aspx?data=billrates)
+
+\(f(\sigma)=C_{BSM}-C_M\) is defined as "fsigma":
+```{r}
+r <- 0.005
+fsigma <- function(sigma, K_i, maturity_i) {
+    cc <- calls[K_i, maturity_i + 1]
+    K <- calls[K_i, 1]
+    if (maturity_i == 1) tau = 23/252 # time to maturity
+    else if(maturity_i == 2) tau = 48/252
+    else tau = 111/252
+    ans <- Callprice(S_0, tau, K, r, sigma) - cc
+    return(ans)
+}
+```
+
+We want to find a interval \([a, a + d]\)(\(d\) should be small enough) that makes the secant method converge
+```{r}
+interval <- calls
+interval[, 2:4] <- NaN
+delta <- 0.1
+for(i in 1:20) {
+    for(j in 1:3) {
+        a <- seq(1, 5, by = delta)
+        for(k in a) {
+            if (fsigma(k,i,j)*fsigma(k + delta, i, j) < 0) {interval[i,j + 1] <- k}
+        }
+    }
+}
+```
+
+```{r results = 'asis'}
+knitr::kable(interval, caption = "Left side of intervals")
+```
+Here come NaN values which means there is no root for \(\sigma\) in such a conditon.
+
+```{r}
+ImpliedVolatility <- calls
+ptm <- proc.time()
+count <- 0
+for(i in 1:20) {
+    for(j in 1:3) {
+        a <- interval[i, j + 1]
+        if (is.na(a) == T) {
+            ImpliedVolatility[i, j + 1] <- NaN
+            next
+            }
+        b <- a + delta
+        epsilon <- abs(a - b)
+        while(epsilon > 1e-4) {
+            count <- count +1
+            mid <- (a + b)/2
+            if(fsigma(a, i, j)*fsigma(mid, i, j) < 0 ) b <- mid
+            else a <- mid
+            epsilon <- abs(a - b)
+        }
+        ImpliedVolatility[i, j+1] <- a
+    }
+}
+count
+ImpliedVolatility
+proc.time() - ptm
+```
+
+### d)
+```{r}
+# Secant
+ImpliedVolatility2 <- calls
+ptm <- proc.time()
+count2 <- 0
+for(i in 1:20) {
+    for(j in 1:3) {
+        x1 <- interval[i, j + 1]
+        if (is.na(x1) == T) {
+            ImpliedVolatility2[i, j + 1] <- NaN
+            next
+        }
+        x2 <- x1 + delta
+        dfxn <- (fsigma(x1, i, j) - fsigma(x2, i, j))/(x1 - x2)
+        tang <- fsigma(x2, i, j)/dfxn
+        epsilon <- abs(tang)
+        while(epsilon > 1e-4) {
+            count2 <- count2 + 1
+            x1 <- x2
+            x2 <- x2 - tang
+            dfxn <- (fsigma(x1, i, j) - fsigma(x2, i, j))/(x1 - x2)
+            tang <- fsigma(x2, i, j)/dfxn
+            epsilon <- abs(tang)
+        }
+        ImpliedVolatility2[i, j+1] <- x2
+    }
+}
+count2
+ImpliedVolatility2
+proc.time() - ptm
+```
+Both the steps and time spent on secant methods (130, 0.041) is less than those spent on bisection method (540, 0.078). I suppose the reason may be the interval is small enough and the secant method's order of convergence is 1.618 which is superlinear.
+
+Also I found that if we set the initial intervals too large, the secant method seldom converge, although the bisection method always converge if there exist roots. So it is hard for me to compare these two methods when the initial intervals is large. (like [1, 10])
+
+### e)
+```{r warning = F}
+temp1 <- as.matrix(ImpliedVolatility)
+temp2 <- rbind(temp1[, 1:2], temp1[, c(1, 3)], temp1[, c(1, 4)])
+maturity <- c(rep("Mar.17.2017", 20), rep("Apr.21.2017", 20), rep("Oct.20.2017", 20))
+newdf <- data.frame(temp2, maturity)
+colnames(newdf)[2] <- "Implied_Volatility"
+
+ggplot(data = newdf, aes(x = Strike, y = Implied_Volatility, colour = maturity)) + geom_point()
+
+```
+
+All call option prices are getting smaller as the Strikes increasing. Longer time to maturity means lower decreasing speed of implied volatility.
+
+Around the actual stock price the implied volatility tend to be equal under different maturities. 
+
+This 3d plot cannot be presented in Rmarkdown pdf, but it works in R file.
+```{r}
+plot3d(ImpliedVolatility$Strike, 1, ImpliedVolatility$Mar.17.2017, col = "blue", ylim = c(.5, 3.5))
+points3d(ImpliedVolatility$Strike, 2, ImpliedVolatility$Apr.21.2017, col = "green")
+points3d(ImpliedVolatility$Strike, 3, ImpliedVolatility$Oct.20.2017, col = "red")
+```
+
+### f)
+To use 3 methods (forward, backword and central) to evaluate delta, vega and gamma, define functions:
+```{r}
+Delta1 <- function(d, S0, tau, K, r, sigma, ty) {
+    if (ty == "b") D <- (Callprice(S0, tau, K, r, sigma) - Callprice(S0 - d, tau, K, r, sigma))/d
+    else if (ty == "f") D <- (Callprice(S0 + d, tau, K, r, sigma) - Callprice(S0, tau, K, r, sigma))/d
+    else if (ty == "c") D <- (Callprice(S0 + d, tau, K, r, sigma) - Callprice(S0 - d, tau, K, r, sigma))/d/2
+    else D <- NaN
+    return(D)
+}
+
+Vega1 <- function(d, S0, tau, K, r, sigma, ty) {
+    if (ty == "b") V <- (Callprice(S0, tau, K, r, sigma) - Callprice(S0, tau, K, r, sigma - d))/d
+    else if (ty == "f") V <- (Callprice(S0, tau, K, r, sigma + d) - Callprice(S0, tau, K, r, sigma))/d
+    else if (ty == "c") V <- (Callprice(S0, tau, K, r, sigma + d) - Callprice(S0, tau, K, r, sigma - d))/d/2
+    else V <- NaN
+    return(V)
+}
+
+Gamma1 <- function(d, S0, tau, K, r, sigma, ty) {
+    if (ty == "b") {G <- (Callprice(S0, tau, K, r, sigma) - 2*Callprice(S0 - d, tau, K, r, sigma) + 
+                              Callprice(S0 - 2*d, tau, K, r, sigma))/d^2}
+    else if (ty == "f") {G <- (Callprice(S0 + 2*d, tau, K, r, sigma) - 2*Callprice(S0 + d, tau, K, r, sigma) + 
+                                   Callprice(S0, tau, K, r, sigma))/d^2}
+    else if (ty == "c") {G <- (Callprice(S0 + d, tau, K, r, sigma) - 2*Callprice(S0, tau, K, r, sigma) + 
+                                       Callprice(S0 - d, tau, K, r, sigma))/d^2}
+    else G <- NaN
+    return(G)
+}
+```
+
+For delta
+```{r}
+d1 <- seq(1, .01,by=-0.01)
+fd_f <- sapply(d1, Delta1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "f")
+fd_b <- sapply(d1, Delta1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "b")
+fd_c <- sapply(d1, Delta1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "c")
+
+type <- c(rep("forward", length(d1)), rep("backword", length(d1)), rep("central", length(d1)))
+
+delta_dd <- data.frame("d" = rep(d1, 3), "delta" = c(fd_f, fd_b, fd_c), "type" = type)
+ggplot(data = delta_dd, aes(x = d, y = delta, colour = type)) + geom_line()
+```
+
+For vega
+```{r}
+fv_f <- sapply(d1, Vega1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "f")
+fv_b <- sapply(d1, Vega1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "b")
+fv_c <- sapply(d1, Vega1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "c")
+
+vega_dd <- data.frame("d" = rep(d1, 3), "vega" = c(fv_f, fv_b, fv_c), "type" = type)
+ggplot(data = vega_dd, aes(x = d, y = vega, colour = type)) + geom_line()
+```
+
+For gamma
+```{r}
+fg_f <- sapply(d1, Gamma1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "f")
+fg_b <- sapply(d1, Gamma1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "b")
+fg_c <- sapply(d1, Gamma1, S0=S0, tau=tau, K=K, r=r, sigma=sigma, "c")
+
+gamma_dd <- data.frame("d" = rep(d1, 3), "gamma" = c(fg_f, fg_b, fg_c), "type" = type)
+ggplot(data = gamma_dd, aes(x = d, y = gamma, colour = type)) + geom_line()
+```
+These plots shows that all three parameters converge as \(d\) is approaching to \(0\).
+
+```{r}
+d <- 1e-5 # let d be small enough
+Delta1(d, S0, tau, K, r, sigma, "f") #forward
+Delta1(d, S0, tau, K, r, sigma, "b") #backward
+Delta1(d, S0, tau, K, r, sigma, "c") #central
+
+Vega1(d, S0, tau, K, r, sigma, "f") #forward
+Vega1(d, S0, tau, K, r, sigma, "b") #backword
+Vega1(d, S0, tau, K, r, sigma, "c") #central
+
+Gamma1(d, S0, tau, K, r, sigma, "f") #forward
+Gamma1(d, S0, tau, K, r, sigma, "b") #backword
+Gamma1(d, S0, tau, K, r, sigma, "c") #central
+```
+
+So in initial conditon, \( delta = 0.5405\), \( vega = 13.5322\), \( gamma = 0.0320\).
+
+### g)
+If we apply the implied volatilities, access to the same process as f):
+
+```{r}
+delta_df <- ImpliedVolatility
+vega_df <- ImpliedVolatility
+gamma_df <- ImpliedVolatility
+
+for (i in 1:20) {
+    for (j in 1:3) {
+        sigma <- ImpliedVolatility[i, j+1]
+        if (is.na(sigma) == T) {
+            delta_df[i, j+1] <- NaN
+            vega_df[i, j+1] <- NaN
+            gamma_df[i, j+1] <- NaN
+            break}
+        delta_df[i, j+1] <- Delta1(d, S_0, tau, K, r, sigma, "c")
+        vega_df[i, j+1] <- Vega1(d, S_0, tau, K, r, sigma, "c")
+        gamma_df[i, j+1] <- Gamma1(d, S_0, tau, K, r, sigma, "c")
+    }
+}
+```
+
+The results are showed below:
+
+```{r results = 'asis'}
+knitr::kable(delta_df, caption = "Delta")
+```
+```{r results = 'asis'}
+knitr::kable(vega_df, caption = "Vega")
+```
+```{r results = 'asis'}
+knitr::kable(gamma_df, caption = "Gamma")
+```
+
+
+## Question 2
+### a)
+
+Define the the real–valued function:
+```{r}
+fx <- function(x) {
+    if (x == 0) fx <- 1
+    else fx <- sin(x)/x
+    return(fx)
+}
+```
+
+For the trapezoidal rule:
+```{r}
+trapezoidal <- function(n, a) {
+    h <- 2*a/(n-1)
+    x <- seq(-a, a, by = h)
+    wn <- rep(h, n)
+    wn[1] <- h/2
+    wn[n] <- h/2
+    fn <- sapply(x, fx)
+    ans <- sum(fn*wn)
+    return(ans)
+}
+trapezoidal(1e6, 1e6)
+```
+
+For the Simpson’s quadrature rule
+
+```{r}
+simpson <- function(n, a) {
+    h <- 2*a/(n-1)
+    x <- seq(-a, a, by = h)
+    wn <- rep(c(0, 4*h/3), floor(n/2)) + rep(c(2*h/3, 0), floor(n/2))
+    wn[1] <- h/3
+    wn[n] <- h/3
+    fn <- sapply(x, fx)
+    ans <- sum(fn*wn)
+    return(ans)
+}
+simpson(1e6, 1e6)
+```
+Both the results are close to \(\pi\).
+
+### b)
+To compute the truncation errors, define functions "TE_trape" and "TE_simp" respectively:
+```{r}
+TE_trape <- function(n, a) {
+    temp <- trapezoidal(n, a)
+    te <- temp - pi
+    return(te)
+}
+
+TE_simp <- function(n, a) {
+    temp <- simpson(n, a)
+    te <- temp - pi
+    return(te)
+}
+```
+
+(1) Fix \(a = 10^4\)
+```{r}
+# Truncation error of trapezoidal rule
+a <- 1e4
+N <- seq(100, 1e4, by = 45)
+Truncation_error <- sapply(N, TE_trape, a=a) 
+plot(N, Truncation_error, type = "l", col = "blue", main = "Truncation_error by trapezoidal rule")
+```
+
+```{r}
+# Truncation error of Simpson's rule
+a <- 1e4
+N <- seq(100, 1e4, by = 45)
+Truncation_error <- sapply(N, TE_simp, a=a) 
+plot(N, Truncation_error, type = "l", col = "red", main = "Truncation_error by simpson's rule")
+```
+
+For both rules, the truncation error decrease progressively as n gets larger and larger. Besides, the simpson's rule converge later and fluctuate more.
+
+(2) fix \(N = 10^6\):
+```{r}
+# Truncation error of trapezoidal rule
+N <- 1e4
+a <- seq(1e2, 1e4, by = 45)
+Truncation_error <- sapply(a, TE_trape, n = N) 
+plot(a, Truncation_error, type = "l", col = "blue", main = "Truncation_error by trapezoidal rule")
+```
+
+```{r}
+# Truncation error of Simpson's rule
+N <- 1e4
+a <- seq(1e2, 1e4, by = 45)
+Truncation_error <- sapply(a, TE_simp, n = N) 
+plot(a, Truncation_error, type = "l", col = "red", main = "Truncation_error by simpson's rule")
+```
+For both rules, the truncation error decrease  as a gets larger and larger and fluctuate around 0. 
+
+### c)
+```{r}
+steps_trape <- function(a) {
+    diff <- abs(trapezoidal(a, 102)-trapezoidal(a, 101))
+    n0 = 103
+    n = n0
+    epsilonI <- 1e-4
+    while(diff > epsilonI) {
+        diff <- abs(trapezoidal(a, n)-trapezoidal(a, n-1))
+        n <- n + 1
+    }
+    count <- n - n0 +1
+    return(count)
+}
+
+steps_simp <- function(a) {
+    diff <- abs(simpson(a, 102)-simpson(a, 101))
+    n0 = 103
+    n = n0
+    epsilonI <- 1e-4
+    while(diff > epsilonI) {
+        diff <- abs(simpson(a, n)-simpson(a, n-1))
+        n <- n + 1
+    }
+    count <- n - n0 +1
+    return(count)
+}
+```
+
+```{r}
+a <- seq(50, 1000, by=10)
+steps_by_tr <- sapply(a, steps_trape)
+steps_by_si <- sapply(a, steps_simp)
+plot(a, steps_by_si, type = "l", col = "blue",  ylab = "steps")
+lines(a, steps_by_tr, col = "red")
+legend("topright", c("trapezoidal", "simpson"),
+       col=c("red", "blue"))
+```
+When a increases, steps processes by simpson's rule also increase but can still converge when steps are large enough. While steps by trapezoidal rule will converge to a number around 80 in this case.
+
+### d)
+For another integrand:
+```{r}
+fx2 <- function(x) {
+    f <- 1 + exp(-x)*sin(8*x^(2/3))
+}
+```
+
+```{r}
+trapezoidal2 <- function(n) {
+    a1 <- 0
+    a2 <- 2
+    x <- seq(a1, a2, length.out = n)
+    h <- x[2] - x[1]
+    wn <- rep(h, n)
+    wn[1] <- h/2
+    wn[n] <- h/2
+    fn <- sapply(x, fx2)
+    ans <- sum(fn*wn)
+    return(ans)
+} 
+
+simpson2 <- function(n) {
+    a1 <- 0
+    a2 <- 2
+    x <- seq(a1, a2, length.out = n)
+    h <- x[2] - x[1]
+    wn <- rep(c(0, 4*h/3), floor(n/2)) + rep(c(2*h/3, 0), floor(n/2))
+    wn[1] <- h/3
+    wn[n] <- h/3
+    fn <- sapply(x, fx2)
+    ans <- sum(fn*wn)
+    return(ans)
+} 
+
+epsilon <- 1
+N <- 11
+I1 <- trapezoidal2(10)
+while (epsilon > 1e-4) {
+    I2 <- trapezoidal2(N)
+    epsilon <- abs(I1 - I2)
+    I1 <- I2
+    N <- N + 1
+}
+print(I1)
+
+epsilon <- 1
+N <- 11
+I1 <- simpson2(10)
+while (epsilon > 1e-4) {
+    I2 <- simpson2(N)
+    epsilon <- abs(I1 - I2)
+    I1 <- I2
+    N <- N + 1
+}
+print(I1)
+```
+The integral by trapezoidal rule converges to 2.0126 while the integral by simpson's rule converges to 2.0162. These two integral are very close.
+
+## Question 3
+```{r}
+S0 <- 1
+TT <- 5
+t <- 0
+tau <- TT-t
+r <- 0
+V0 <- 0.1
+theta <- 0.1
+sigma <- 0.2
+rho <- -0.3
+lambda <- 0
+q <- 0 # Divident yield
+
+a <- 1000
+N <- 1001 # must be an integer
+
+# The Simpson’s rule
+simpsonReal <- function(n, a, i, K, kappa) {
+    x <- seq(1/a, a, length.out = n)
+    h <- x[2] - x[1]
+    wn <- rep(c(2*h/3, 4*h/3), floor(n/2))
+    wn[1] <- h/3
+    wn[n] <- h/3
+    fn <- sapply(x, RE, i = i, K = K, kappa = kappa)
+    ans <- sum(fn*wn)
+    return(ans)
+}
+
+ub <- function(i, kappa) {
+    if (i == 1) {
+        u <- 0.5
+        b <- kappa + lambda - rho*sigma
+    }
+    else if (i == 2) {
+        u <- -0.5
+        b <- kappa + lambda
+    }
+    ub <- c(u, b)
+    return(ub)
+}
+
+C <- function(x, i, kappa) {
+    u <- ub(i, kappa)[1]
+    b <- ub(i, kappa)[2]
+    d <- sqrt((rho*sigma*x*1i - b)^2 - sigma^2*(2*u*x*1i - x^2))
+    g <- (b - rho*sigma*x*1i + d)/(b - rho*sigma*x*1i - d)
+    cc <- (r - q)*x*tau*1i + 
+        kappa*theta/sigma^2*((b - rho*sigma*x*1i + d)*tau - 2*log((1 - g*exp(d*tau))/(1 - g)))
+    return(cc)
+}
+
+D <- function(x, i, kappa) {
+    u <- ub(i, kappa)[1]
+    b <- ub(i, kappa)[2]
+    d <- sqrt((rho*sigma*x*1i - b)^2 - sigma^2*(2*u*x*1i - x^2))
+    g <- (b - rho*sigma*x*1i + d)/(b - rho*sigma*x*1i - d)
+    dd <- (b - rho*sigma*x*1i + d)/sigma^2*(1 - exp(d*tau))/(1 - g*exp(d*tau))
+    return(dd)
+}
+
+phi <- function(x, i, kappa) {
+    phi <- exp(C(x, i, kappa) + D(x, i, kappa)*V0 + 1i*x*log(S0))
+    return(phi)
+}
+
+RE <- function(x, i, K, kappa) {
+    temp <- exp(-1i*x*log(K))*phi(x, i, kappa)/(1i*x)
+    RE <- Re(temp)
+    RE[is.nan(RE)] = 0
+    return(RE)
+}
+
+Calloption <- function(N, a, K, kappa) {
+    P1 <- 1/2 + 1/pi*simpsonReal(N, a, 1, K, kappa)
+    P2 <- 1/2 + 1/pi*simpsonReal(N, a, 2, K, kappa)
+    C <- S0*P1 - K*exp(-(r-q)*tau)*P2
+    return(C)
+}
+
+K <- c(0.5, 0.75, 1, 1.25, 1.5)
+kappa <- c(1, 2, 4)
+
+temp <- as.data.frame(matrix(rep(0, 15), nrow = 5))
+comparetable <- data.frame(temp)
+rownames(comparetable) <- as.character(K)
+
+for (i in 1:5) {
+    for (j in 1:3) {
+        k <- K[i]
+        kap <- kappa[j]
+        Call <- Calloption(N, a, k, kap)
+        comparetable[i, j] <- Call
+    }
+}
+Real_value <- c(0.543017, 0.385109, 0.273303, 0.195434, 0.14121)
+comparetable <- data.frame(comparetable, Real_value)
+colnames(comparetable)[1:3] <- c("kappa=1","kappa=2","kappa=4")
+
+```
+
+The result is showed below:
+
+```{r results = 'asis'}
+knitr::kable(comparetable, caption = "Table")
+```
+
